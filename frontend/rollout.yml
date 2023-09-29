@@ -1,0 +1,66 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: canary-demo
+spec:
+  replicas: 5
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: canary-demo
+  template:
+    metadata:
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/agent-inject-status: "update"
+        vault.hashicorp.com/role: "wezvatech-admin"
+        vault.hashicorp.com/agent-inject-secret-database-config.txt: "internal/data/database/config"
+        vault.hashicorp.com/agent-inject-template-database-config.txt: |
+          {{- with secret "internal/data/database/config" -}} 
+          postgresql://{{ .Data.data.username }}:{{ .Data.data.password }}@postgres:5432/wizard
+          {{- end -}}
+      labels:
+        app: canary-demo
+    spec:
+      serviceAccountName: wezvatech-admin
+      affinity:
+        podAffinity:     # change to pod Affinity if using minikube
+        #podAntiAffinity:     # change to pod Affinity if using minikube
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - mongo
+            topologyKey: "kubernetes.io/hostname"
+      initContainers:
+      - name: init-mydb
+        image: busybox:1.28
+        command: ['sh', '-c', "until nslookup mongo-svc.$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace).svc.cluster.local; do echo waiting for mydb; sleep 2; done"]
+      containers:
+      - name: canary-demo
+        image: adamtravis/rollouts:blue # you can use the following tags - red, blue, green
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 8080
+          #containerPort: 80
+          protocol: TCP
+        resources:
+          requests:
+            memory: 32Mi
+            cpu: 5m
+  strategy:
+    canary:
+      canaryService: canary-demo-preview
+      steps:
+      - setWeight: 20
+      - pause: {}
+      - setWeight: 40
+      - pause: {duration: 30}
+      - setWeight: 60
+      - pause: {duration: 30}
+      - setWeight: 80
+      - pause: {duration: 30}
+
